@@ -23,19 +23,20 @@ def fetch_reviews(app_id, lang='en', country='us', num_reviews=100, filter_score
         country=country,
         sort=Sort.NEWEST,
         count=num_reviews,
-        filter_score_with=None
+        filter_score_with=filter_score_with
     )
 
     return result
 
 if __name__ == "__main__":
 
-    app_id = "com.bigbasket.mobileapp"
+    app_id = "com.jpl.jiomart"
     country = "in"
     num_reviews = 10000
+    app_name = "jiomart"
     
     for n in range(5):
-        output_excel_file = f'bigbasket_reviews_10k_score_{n+1}.xlsx'
+        output_excel_file = f'app_reviews_data_files/{app_name}_reviews_10k_score_{n+1}.xlsx'
         reviews_data = fetch_reviews(app_id, country=country, num_reviews=num_reviews, filter_score_with=n+1)
         print(f"# of Reviews Fetched for score {n+1} : {len(reviews_data)}")
         # Convert the list of dictionaries to a pandas DataFrame

@@ -1,7 +1,14 @@
 app_id = "com.zeptoconsumerapp"
 country = "in"
 num_reviews = 10000
+app_name = "zepto"
 
 app_id = "com.bigbasket.mobileapp"
 country = "in"
 num_reviews = 10000
+app_name = "bigbasket"
+
+app_id = "com.jpl.jiomart"
+country = "in"
+num_reviews = 10000
+app_name = "jiomart"
