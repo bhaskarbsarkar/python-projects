@@ -4,6 +4,7 @@ from datetime import datetime, date # Import date
 import uuid # To generate unique IDs
 import sqlite3
 import os
+import json # For loading course data
 from fpdf import FPDF # Import FPDF
 
 # --- Configuration ---
@@ -11,6 +12,7 @@ APP_TITLE = "Progressive Computers Student CRM"
 APP_ICON = "🎓"
 DB_FILE = "student_crm.db"
 AUDIT_DB_FILE = "audit_log.db"
+COURSES_FILE = "courses.json" # Path to your courses JSON file
 BACKUP_DIR = "backups"
 ADMIN_PASSWORD = "admin" # Replace with a more secure method if needed (e.g., environment variable)
 APP_PASSWORD = "password" # Password for general app access
@@ -35,7 +37,8 @@ EXPECTED_COLUMNS_TYPES = {
     'Total Fees': 'REAL DEFAULT 0', # Use REAL for potential decimal values
     'Fees Paid': 'REAL DEFAULT 0',
     'Balance Fees': 'REAL DEFAULT 0',
-    'Course Enrollment Date': 'TEXT' # New column
+    'Course Enrollment Date': 'TEXT',
+    'Enrollment No': 'TEXT' # New column for enrollment number
 }
 EXPECTED_COLUMNS = list(EXPECTED_COLUMNS_TYPES.keys())
 
@@ -48,13 +51,16 @@ def init_db(db_path=DB_FILE):
         # Check if the new column exists and add it if it doesn't
         cursor.execute("PRAGMA table_info(students)")
         columns = [info[1] for info in cursor.fetchall()]
-        if 'Course Enrollment Date' not in columns:
-            try:
-                cursor.execute('ALTER TABLE students ADD COLUMN "Course Enrollment Date" TEXT')
-                conn.commit()
-                print("Added 'Course Enrollment Date' column to students table.") # Optional: log this
-            except Exception as e:
-                st.error(f"Failed to add 'Course Enrollment Date' column: {e}")
+
+        # Add columns if they don't exist
+        for col_name, col_type in [('Course Enrollment Date', 'TEXT'), ('Enrollment No', 'TEXT')]:
+            if col_name not in columns:
+                try:
+                    cursor.execute(f'ALTER TABLE students ADD COLUMN "{col_name}" {col_type}')
+                    print(f"Added '{col_name}' column to students table.") # Optional: log this
+                except Exception as e:
+                    st.error(f"Failed to add '{col_name}' column: {e}")
+        conn.commit() # Commit after all potential ALTER TABLE statements
 
         # Create table dynamically based on EXPECTED_COLUMNS_TYPES
         columns_sql = ", ".join([f'"{col}" {dtype}' for col, dtype in EXPECTED_COLUMNS_TYPES.items()])
@@ -139,6 +145,7 @@ def load_data() -> pd.DataFrame:
         # Convert relevant columns to appropriate types
         data['Date of Birth'] = pd.to_datetime(data['Date of Birth'], errors='coerce').dt.date
         data['Course Enrollment Date'] = pd.to_datetime(data['Course Enrollment Date'], errors='coerce').dt.date
+        # Enrollment No is TEXT, so no specific conversion needed here unless formatting is required
         data['Total Fees'] = pd.to_numeric(data['Total Fees'], errors='coerce').fillna(0)
         data['Fees Paid'] = pd.to_numeric(data['Fees Paid'], errors='coerce').fillna(0)
         data['Balance Fees'] = pd.to_numeric(data['Balance Fees'], errors='coerce').fillna(0)
@@ -147,13 +154,10 @@ def load_data() -> pd.DataFrame:
         for col in data.select_dtypes(include='object').columns:
             data[col] = data[col].fillna('')
 
-        # Ensure all expected columns are present, even if table was empty
-        for col in EXPECTED_COLUMNS:
-            if col not in data.columns:
-                data[col] = None # Add missing columns
-
-        return data[EXPECTED_COLUMNS].fillna('') # Return in expected order and fill any remaining NaNs
-
+        # Reindex to ensure correct order and all expected columns are present.
+        # Missing columns will be added with NaN, then filled with empty string.
+        data = data.reindex(columns=EXPECTED_COLUMNS)
+        return data.fillna('')
     except Exception as e:
         st.error(f"Error loading data from Database: {e}")
         return pd.DataFrame(columns=EXPECTED_COLUMNS) # Return empty DataFrame on error
@@ -173,6 +177,30 @@ def load_audit_log() -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error loading audit log data: {e}")
         return pd.DataFrame(columns=list(AUDIT_COLUMNS_TYPES.keys()))
+
+# --- Course Data Loading ---
+def load_course_data(file_path=COURSES_FILE) -> list:
+    """Loads course data from a JSON file."""
+    default_courses = [
+        {"name": "Default Course 1", "price": 1000.00},
+        {"name": "Default Course 2", "price": 2000.00}
+    ]
+    try:
+        if not os.path.exists(file_path):
+            st.warning(f"'{file_path}' not found. Creating with default courses. Please customize it.")
+            with open(file_path, 'w') as f:
+                json.dump(default_courses, f, indent=2)
+            return default_courses
+
+        with open(file_path, 'r') as f:
+            courses = json.load(f)
+        if not isinstance(courses, list) or not all(isinstance(c, dict) and "name" in c and "price" in c for c in courses):
+            st.error(f"Invalid format in '{file_path}'. Expected a list of {{'name': str, 'price': float}}.")
+            return default_courses # Fallback to default
+        return courses
+    except Exception as e:
+        st.error(f"Error loading course data from '{file_path}': {e}")
+        return default_courses # Fallback to default
 
 
 # --- Student DB CRUD ---
@@ -225,65 +253,113 @@ def delete_student_db(record_id: str):
         cursor.execute(sql, (record_id,))
         log_action("DELETE", record_id=record_id, details="Deleted student record")
 
+# --- PDF Helper Function to draw one receipt copy ---
+def _draw_single_receipt_content(pdf: FPDF, details: pd.Series, y_offset: float, receipt_title: str):
+    """Draws one copy of the receipt content at a given y_offset."""
+    line_height = 6
+    col_width_label = 45
+    col_width_value = pdf.w - 2 * pdf.l_margin - col_width_label - 5 # 5 for spacing
+
+    # Set starting position for this receipt copy
+    pdf.set_y(y_offset + 5) # 10mm margin from top of this section
+    x_start = pdf.get_x()
+
+    # --- Outer Border for this receipt copy ---
+    # Calculate height needed for this section (approximate, adjust as needed)
+    # This is a rough estimate; dynamic height calculation can be complex.
+    # For fixed content like this, a pre-calculated or trial-and-error height is often used.
+    receipt_section_height = 130 # Adjusted height to properly fit all content including signatures
+    pdf.rect(x_start, y_offset + 5, pdf.w - 2 * pdf.l_margin, receipt_section_height)
+
+    # --- Header ---
+    pdf.set_font("Helvetica", 'B', 14)
+    pdf.cell(0, 10, "Fee Receipt", ln=True, align='C', border=0)
+    pdf.set_font("Helvetica", 'I', 8)
+    pdf.cell(0, 5, receipt_title, ln=True, align='C', border=0)
+    pdf.ln(1)
+
+    # --- Institute Details ---
+    current_x = pdf.get_x() # Save current X to reset after multi_cell
+    pdf.set_font("Helvetica", 'B', 11)
+    pdf.cell(0, line_height, "Progressive Computers", ln=True, align='C', border=0)
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(0, line_height-1, "Budhi Mai colony, Raigarh (CG)", ln=True, align='C', border=0)
+    pdf.cell(0, line_height-1, "Contact: 9425252051, 7489715491", ln=True, align='C', border=0)
+    pdf.ln(4)
+
+    # --- Receipt Info ---
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(col_width_label, line_height, "Date:", border=0)
+    pdf.cell(col_width_value, line_height, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), ln=True, border=0)
+    pdf.cell(col_width_label, line_height, "Record ID:", border=0)
+    pdf.cell(col_width_value, line_height, str(details.get('Record ID', 'N/A')), ln=True, border=0)
+    pdf.ln(3)
+
+    # --- Student Details ---
+    pdf.set_font("Helvetica", 'B', 10)
+    pdf.cell(0, line_height, "Student Details:", ln=True, border="B") # Bottom border for section
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(col_width_label, line_height, "Name:", border=0)
+    pdf.cell(col_width_value, line_height, str(details.get('Student Name', 'N/A')), ln=True, border=0)
+    pdf.cell(col_width_label, line_height, "Course:", border=0)
+    pdf.cell(col_width_value, line_height, str(details.get('Course Name', 'N/A')), ln=True, border=0)
+    pdf.cell(col_width_label, line_height, "Enrolled On:", border=0)
+    pdf.cell(col_width_value, line_height, str(details.get('Course Enrollment Date', 'N/A')), ln=True, border=0)
+    pdf.cell(col_width_label, line_height, "Mobile No:", border=0)
+    pdf.cell(col_width_value, line_height, str(details.get('Mobile No', 'N/A')), ln=True, border=0)
+    # pdf.cell(col_width_label, line_height, "Email:", border=0) # Optional
+    # pdf.cell(col_width_value, line_height, str(details.get('Email Address', 'N/A')), ln=True, border=0) # Optional
+    pdf.ln(3)
+
+    # --- Fee Details ---
+    pdf.set_font("Helvetica", 'B', 10)
+    pdf.cell(0, line_height, "Fee Details:", ln=True, border="B")
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(col_width_label, line_height, "Total Course Fees:", border=0)
+    pdf.cell(col_width_value, line_height, f"{details.get('Total Fees', 0.0):.2f}", ln=True, border=0, align='R')
+    pdf.cell(col_width_label, line_height, "Total Fees Paid:", border=0)
+    pdf.cell(col_width_value, line_height, f"{details.get('Fees Paid', 0.0):.2f}", ln=True, border=0, align='R')
+    pdf.set_font("Helvetica", 'B', 9) # Bold for Balance
+    pdf.cell(col_width_label, line_height, "Balance Fees:", border=0)
+    pdf.cell(col_width_value, line_height, f"{details.get('Balance Fees', 0.0):.2f}", ln=True, border=0, align='R')
+    pdf.set_font("Helvetica", size=9)
+    pdf.cell(col_width_label, line_height, "Last Payment Mode:", border=0)
+    pdf.cell(col_width_value, line_height, str(details.get('Fees Detail', 'N/A')), ln=True, border=0)
+    pdf.ln(5)
+
+    # --- Signature Placeholders ---
+    pdf.set_y(y_offset + receipt_section_height - 20) # Position signatures near bottom of this section
+    pdf.set_font("Helvetica", size=8)
+    pdf.cell( (pdf.w - 2 * pdf.l_margin) / 2, line_height, "_________________________      ", ln=False, border=0, align='L')
+    pdf.cell( (pdf.w - 2 * pdf.l_margin) / 2, line_height, "_________________________      ", ln=True, border=0, align='L')
+    pdf.cell( (pdf.w - 2 * pdf.l_margin) / 2, line_height, "(Student Signature)", ln=False, border=0, align='C')
+    pdf.cell( (pdf.w - 2 * pdf.l_margin) / 2, line_height, "(Authorized Signatory)", ln=True, border=0, align='C')
+    pdf.ln(2)
+
+    # --- Footer for this copy ---
+    pdf.set_font("Helvetica", 'I', 7)
+    pdf.cell(0, line_height-2, "*This is a system-generated receipt.*", ln=True, align='C', border=0)
+
 # --- PDF Generation ---
 def generate_receipt_pdf(details: pd.Series) -> bytes:
     """Generates a PDF receipt for the given student details."""
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Helvetica", size=12)
+    page_height = pdf.h
+    middle_of_page = page_height / 2
 
-    # --- Header ---
-    pdf.set_font("Helvetica", 'B', 16)
-    pdf.cell(0, 10, "Fee Receipt", ln=True, align='C')
-    pdf.ln(5) # Line break
+    # Draw Student Copy (Top Half)
+    _draw_single_receipt_content(pdf, details, y_offset=0, receipt_title="Student Copy")
 
-    # --- Institute Details (Optional - Add your details here) ---
-    pdf.set_font("Helvetica", 'B', 12)
-    pdf.cell(0, 6, "Progressive Computers", ln=True, align='C')
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(0, 5, "Budhi Mai colony, Raigarh (CG)", ln=True, align='C')
-    pdf.cell(0, 5, "9425252051, 7489715491", ln=True, align='C')
-    pdf.ln(7)
+    # Draw a line to separate the two halves
+    pdf.set_line_width(0.5)
+    pdf.set_draw_color(0, 0, 0) # Black
+    # Adjust y for the line to be slightly above the start of the second receipt's border
+    line_y_position = middle_of_page - 2.5 # Small offset before the next receipt's top border
+    pdf.line(pdf.l_margin, line_y_position, pdf.w - pdf.r_margin, line_y_position)
 
-    # --- Receipt Info ---
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(0, 5, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align='R')
-    pdf.cell(0, 5, f"Receipt For Record ID: {details.get('Record ID', 'N/A')}", ln=True, align='L')
-    pdf.ln(5)
-
-    # --- Student Details ---
-    pdf.set_font("Helvetica", 'B', 11)
-    pdf.cell(0, 7, "Student Details:", ln=True)
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(40, 6, "Name:", border=0)
-    pdf.cell(0, 6, str(details.get('Student Name', 'N/A')), ln=True, border=0)
-    pdf.cell(40, 6, "Course:", border=0)
-    pdf.cell(0, 6, str(details.get('Course Name', 'N/A')), ln=True, border=0)
-    pdf.cell(40, 6, "Enrolled On:", border=0)
-    pdf.cell(0, 6, str(details.get('Course Enrollment Date', 'N/A')), ln=True, border=0)
-    pdf.cell(40, 6, "Mobile No:", border=0)
-    pdf.cell(0, 6, str(details.get('Mobile No', 'N/A')), ln=True, border=0)
-    pdf.cell(40, 6, "Email:", border=0)
-    pdf.cell(0, 6, str(details.get('Email Address', 'N/A')), ln=True, border=0)
-    pdf.ln(5)
-
-    # --- Fee Details ---
-    pdf.set_font("Helvetica", 'B', 11)
-    pdf.cell(0, 7, "Fee Details:", ln=True)
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(50, 6, "Total Course Fees:", border=0)
-    pdf.cell(0, 6, f"{details.get('Total Fees', 0.0):.2f}", ln=True, border=0)
-    pdf.cell(50, 6, "Total Fees Paid:", border=0)
-    pdf.cell(0, 6, f"{details.get('Fees Paid', 0.0):.2f}", ln=True, border=0)
-    pdf.cell(50, 6, "Balance Fees:", border=0)
-    pdf.cell(0, 6, f"{details.get('Balance Fees', 0.0):.2f}", ln=True, border=0)
-    pdf.cell(50, 6, "Last Payment Mode:", border=0)
-    pdf.cell(0, 6, str(details.get('Fees Detail', 'N/A')), ln=True, border=0)
-    pdf.ln(10)
-
-    # --- Footer ---
-    pdf.set_font("Helvetica", 'I', 8)
-    pdf.cell(0, 5, "*This is a system-generated receipt.*", ln=True, align='C')
+    # Draw Institute Copy (Bottom Half)
+    _draw_single_receipt_content(pdf, details, y_offset=middle_of_page, receipt_title="Institute Copy")
 
     # Output PDF as bytes
     return bytes(pdf.output(dest='S')) # Explicitly convert to bytes
@@ -339,6 +415,10 @@ backup_database(AUDIT_DB_FILE, "logs", BACKUP_DIR)
 # Load data initially
 if 'student_data' not in st.session_state:
     st.session_state.student_data = load_data()
+if 'course_list' not in st.session_state:
+    st.session_state.course_list = load_course_data()
+    # Create a mapping for quick price lookup
+    st.session_state.course_price_map = {course['name']: course['price'] for course in st.session_state.course_list}
 
 # Use tabs for different sections
 tab_view, tab_add, tab_edit_delete, tab_receipt, tab_balance = st.tabs([
@@ -381,6 +461,22 @@ with tab_view:
 # --- Add Student Tab ---
 with tab_add:
     st.header("Add New Student Record")
+
+    # --- Course Selection and Dependent Fields (Outside Form) ---
+    st.subheader("1. Select Course")
+    course_names = [course['name'] for course in st.session_state.course_list]
+
+    def update_fees_and_date_callback(): # Renamed for clarity
+        selected_course_name = st.session_state.get("add_course_select_main") # Use new key
+        if selected_course_name and selected_course_name in st.session_state.course_price_map:
+            st.session_state.add_total_fees_val = st.session_state.course_price_map[selected_course_name]
+            st.session_state.add_enroll_date_val = datetime.now().date()
+        else: # Handle case where no course is selected or selection is cleared
+            st.session_state.add_total_fees_val = 0.0
+            st.session_state.add_enroll_date_val = datetime.now().date()
+
+    selected_course_main = st.selectbox("Course Name*", options=course_names, index=None, placeholder="Select a course...", key="add_course_select_main", on_change=update_fees_and_date_callback)
+
     with st.form("add_student_form", clear_on_submit=True):
         st.subheader("Student Details")
         s_name = st.text_input("Student Name*", key="add_s_name")
@@ -396,49 +492,57 @@ with tab_add:
         enroll_date = st.date_input(
             "Course Enrollment Date*",
             key="add_enroll_date",
-            value=datetime.now().date(), # Default to today
+            value=st.session_state.get("add_enroll_date_val", datetime.now().date()), # Value from session state
             format="YYYY-MM-DD")
+        enroll_no = st.text_input("Enrollment No (Optional)", key="add_enroll_no")
         address = st.text_area("Address", key="add_address")
 
         st.subheader("Contact Information")
         mobile = st.text_input("Mobile No*", key="add_mobile")
         email = st.text_input("Email Address", key="add_email")
         aadhar = st.text_input("Aadhar Card No", key="add_aadhar") # Keep as text for flexibility
-
-        st.subheader("Course and Fees")
-        course = st.text_input("Course Name*", key="add_course")
+        
+        st.subheader("Fees Information")
+        # Display selected course (read-only or just for info)
+        st.markdown(f"**Selected Course:** {st.session_state.get('add_course_select_main', 'None')}")
+        
         fees_detail = st.selectbox("Fees Payment Mode", ["Online", "Cheque", "Cash", "Other"], key="add_fees_detail", index=None, placeholder="Select payment mode...")
-        total_fees = st.number_input("Total Course Fees*", min_value=0.0, step=100.0, key="add_total_fees")
-        fees_paid = st.number_input("Fees Paid Initially*", min_value=0.0, step=100.0, key="add_fees_paid")
+        # Total fees is now driven by session state, updated by the selectbox outside the form
+        total_fees_val_form = st.number_input("Total Course Fees*", min_value=0.0, step=100.0, key="add_total_fees_val_form", value=st.session_state.get("add_total_fees_val", 0.0))
+        fees_paid_val = st.number_input("Fees Paid Initially*", min_value=0.0, step=100.0, key="add_fees_paid_val", value=0.0) # Default to 0
 
         submitted = st.form_submit_button("➕ Add Student")
 
+
         if submitted:
             # Basic Validation
-            if not s_name or not mobile or not course or total_fees is None or fees_paid is None or not enroll_date:
+            if not s_name or not mobile or not selected_course or total_fees_val is None or fees_paid_val is None or not enroll_date:
                 st.warning("Please fill in all required fields marked with *.")
             elif fees_paid > total_fees:
                  st.warning("Fees Paid cannot be greater than Total Fees.")
+            elif not st.session_state.get("add_course_select_main"): # Ensure course was selected outside
+                st.warning("Please select a course first.")
             else:
                 try:
                     # Prepare new record
                     record_id = str(uuid.uuid4()) # Generate a unique ID
-                    balance = total_fees - fees_paid
+                    balance = st.session_state.get("add_total_fees_val", 0.0) - fees_paid_val # Use session state for total_fees
                     new_student_dict = {
                         'Record ID': record_id,
                         'Student Name': s_name,
                         'Father Name': f_name,
                         'Mother Name': m_name,
-                        'Course Name': course,
+                        'Course Name': st.session_state.get("add_course_select_main"), # Get from session state
                         'Fees Detail': fees_detail if fees_detail else '',
                         'Date of Birth': dob.strftime('%Y-%m-%d') if dob else None, # Format as string for DB
                         'Course Enrollment Date': enroll_date.strftime('%Y-%m-%d') if enroll_date else None, # Format as string
+                        'Enrollment No': enroll_no if enroll_no else None,
                         'Address': address,
                         'Aadhar Card No': aadhar,
                         'Mobile No': mobile,
                         'Email Address': email,
-                        'Total Fees': total_fees,
-                        'Fees Paid': fees_paid,
+                        'Total Fees': st.session_state.get("add_total_fees_val", 0.0), # Get from session state
+                        'Fees Paid': fees_paid_val,
                         'Balance Fees': balance
                     }
 
@@ -449,6 +553,11 @@ with tab_add:
                     st.session_state.student_data = load_data()
 
                     st.success(f"Student '{s_name}' added successfully with Record ID: {record_id}!")
+                    # Clear form values from session state after successful submission
+                    st.session_state.add_total_fees_val = 0.0
+                    st.session_state.add_enroll_date_val = datetime.now().date()
+                    st.session_state.add_fees_paid_val = 0.0
+                    st.session_state.add_course_select_main = None # Reset selected course
 
                     # No need to clear form manually due to clear_on_submit=True
 
@@ -531,6 +640,7 @@ with tab_edit_delete:
                     edit_enroll_date = st.date_input(
                         "Course Enrollment Date*", value=edit_enroll_date_value,
                         format="YYYY-MM-DD", key=f"edit_enroll_{selected_record_id}")
+                    edit_enroll_no = st.text_input("Enrollment No (Optional)", value=student_details.get('Enrollment No', ''))
 
                     edit_address = st.text_area("Address", value=student_details.get('Address', ''))
                     edit_mobile = st.text_input("Mobile No*", value=student_details.get('Mobile No', ''))
@@ -567,6 +677,7 @@ with tab_edit_delete:
                                     'Mother Name': edit_m_name,
                                     'Date of Birth': edit_dob.strftime('%Y-%m-%d') if edit_dob else None,
                                     'Course Enrollment Date': edit_enroll_date.strftime('%Y-%m-%d') if edit_enroll_date else None,
+                                    'Enrollment No': edit_enroll_no if edit_enroll_no else None,
                                     'Address': edit_address,
                                     'Mobile No': edit_mobile,
                                     'Email Address': edit_email,
