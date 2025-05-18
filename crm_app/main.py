@@ -202,6 +202,18 @@ def load_course_data(file_path=COURSES_FILE) -> list:
         st.error(f"Error loading course data from '{file_path}': {e}")
         return default_courses # Fallback to default
 
+# --- Course Data Saving ---
+def save_course_data(courses_list: list, file_path=COURSES_FILE) -> bool:
+    """Saves the list of courses to the JSON file."""
+    try:
+        with open(file_path, 'w') as f:
+            json.dump(courses_list, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Error saving course data to '{file_path}': {e}")
+        # Consider logging the error more formally here
+        return False
+
 
 # --- Student DB CRUD ---
 def add_student_db(student_data: dict):
@@ -364,6 +376,86 @@ def generate_receipt_pdf(details: pd.Series) -> bytes:
     # Output PDF as bytes
     return bytes(pdf.output(dest='S')) # Explicitly convert to bytes
 
+# --- Admin Portal Function ---
+def admin_portal():
+    st.subheader("🔑 Admin Portal")
+    admin_tab_audit, admin_tab_backup, admin_tab_courses = st.tabs(["📜 Audit Log", "💾 Backup/Restore", "📚 Manage Courses"])
+
+    # --- Audit Log Tab ---
+    with admin_tab_audit:
+        st.header("Audit Log Viewer")
+        audit_df = load_audit_log()
+        if not audit_df.empty:
+            st.dataframe(audit_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Audit log is empty.")
+
+    # --- Backup/Restore Tab ---
+    with admin_tab_backup:
+        st.header("Backup Management")
+        st.info("Backup functionality (e.g., manual backup trigger, restore options) can be added here.")
+        # Example: Button to trigger manual backup
+        if st.button("Trigger Manual Backup Now"):
+            st.info("Attempting to create backups...")
+            backup_database(DB_FILE, "students", BACKUP_DIR)
+            backup_database(AUDIT_DB_FILE, "logs", BACKUP_DIR)
+            st.success("Manual backup process initiated. Check sidebar for status.")
+
+    # --- Manage Courses Tab ---
+    with admin_tab_courses:
+        st.header("Manage Courses")
+        st.markdown("""
+            Here you can add, edit, or delete courses.
+            - To **add** a new course, scroll to the bottom of the table and fill in a new row.
+            - To **edit** a course, click on the cell you want to change and type.
+            - To **delete** a course, select the row(s) and press the `Delete` or `Backspace` key.
+            Click **'Save Course Changes'** to apply your modifications.
+        """)
+
+        if 'course_list' in st.session_state:
+            current_courses_df = pd.DataFrame(st.session_state.course_list)
+        else:
+            current_courses_df = pd.DataFrame(columns=['name', 'price'])
+
+        if current_courses_df.empty or 'name' not in current_courses_df.columns or 'price' not in current_courses_df.columns:
+             current_courses_df = pd.DataFrame(st.session_state.course_list if 'course_list' in st.session_state and st.session_state.course_list else [], columns=['name', 'price'])
+
+        edited_df_from_editor = st.data_editor(
+            current_courses_df,
+            num_rows="dynamic",
+            key="course_data_editor_widget",
+            column_config={
+                "name": st.column_config.TextColumn("Course Name", required=True, help="Name of the course. Must be unique."),
+                "price": st.column_config.NumberColumn("Price (INR)", required=True, min_value=0.0, format="%.2f", help="Price of the course.")
+            },
+            use_container_width=True
+        )
+
+        if st.button("Save Course Changes", key="save_courses_button_admin"):
+            valid_courses_from_editor = []
+            is_data_valid = True
+            processed_df = edited_df_from_editor.dropna(subset=['name'])
+            processed_df = processed_df[processed_df['name'].astype(str).str.strip() != '']
+            temp_course_names = []
+
+            for index, row in processed_df.iterrows():
+                name = str(row.get('name', '')).strip()
+                price = row.get('price')
+                if not name or name in temp_course_names:
+                    st.error(f"Course name '{name}' is invalid (empty or duplicate). Please ensure all course names are unique and not empty.")
+                    is_data_valid = False; break
+                temp_course_names.append(name)
+                if pd.isna(price) or not isinstance(price, (int, float)) or float(price) < 0:
+                    st.error(f"Course '{name}': Price must be a non-negative number.")
+                    is_data_valid = False; break
+                valid_courses_from_editor.append({"name": name, "price": float(price)})
+
+            if is_data_valid:
+                if save_course_data(valid_courses_from_editor):
+                    st.session_state.course_list = valid_courses_from_editor
+                    st.session_state.course_price_map = {course['name']: course['price'] for course in st.session_state.course_list}
+                    st.success("Courses updated successfully! The changes are now live.")
+                    st.rerun()
 # --- App Execution ---
 
 if not check_password():
@@ -822,16 +914,9 @@ with tab_balance:
         st.info("No student data available.")
 
 # --- Admin Panel Tab (Conditionally Displayed) ---
+# The admin_portal function will be called here, which contains its own tabs.
 if show_admin_panel:
-    # Dynamically add the Admin tab if password is correct
-    admin_tab = st.tabs(["🔒 Admin Panel"])[0] # Get the tab object
-    with admin_tab:
-        st.header("Audit Log Viewer")
-        audit_df = load_audit_log()
-        if not audit_df.empty:
-            st.dataframe(audit_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Audit log is empty.")
+    admin_portal() # Call the admin portal function
 
 # --- Footer ---
 st.markdown("---")

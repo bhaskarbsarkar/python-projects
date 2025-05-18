@@ -1,0 +1,5 @@
+Log ID,Timestamp,Action,Record ID,Details
+1,2025-05-01 15:51:02,EDIT,27a9c3e4-c801-488b-b327-d95cdfcd51be,"Updated fields: Student Name, Father Name, Mother Name, Date of Birth, Address, Mobile No, Email Address, Aadhar Card No, Course Name, Fees Detail, Total Fees, Fees Paid, Balance Fees"
+2,2025-05-01 16:04:59,ADD,6931756f-e323-4e11-955c-b1361bc6d839,Added student: Namita
+3,2025-05-01 17:19:09,EDIT,6931756f-e323-4e11-955c-b1361bc6d839,"Updated fields: Student Name, Father Name, Mother Name, Date of Birth, Course Enrollment Date, Address, Mobile No, Email Address, Aadhar Card No, Course Name, Fees Detail, Total Fees, Fees Paid, Balance Fees"
+4,2025-05-01 22:15:07,EDIT,27a9c3e4-c801-488b-b327-d95cdfcd51be,"Updated fields: Student Name, Father Name, Mother Name, Date of Birth, Course Enrollment Date, Address, Mobile No, Email Address, Aadhar Card No, Course Name, Fees Detail, Total Fees, Fees Paid, Balance Fees"

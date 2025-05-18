@@ -1,22 +1,32 @@
 [
   {
     "name": "PGDCA (1 Year)",
-    "price": 15000.00
+    "price": 15000.00,
+    "start_date": "2024-07-01",
+    "end_date": "2025-06-30"
   },
   {
     "name": "Tally ERP 9 with GST (3 Months)",
-    "price": 5000.00
+    "price": 5000.00,
+    "start_date": "2024-08-15",
+    "end_date": "2024-11-14"
   },
   {
     "name": "DCA (6 Months)",
-    "price": 7500.00
+    "price": 7500.00,
+    "start_date": "2024-09-01",
+    "end_date": "2025-02-28"
   },
   {
     "name": "Web Development Basics (4 Months)",
-    "price": 8000.00
+    "price": 8000.00,
+    "start_date": "2024-07-20",
+    "end_date": "2024-11-19"
   },
   {
     "name": "Office Automation Suite (2 Months)",
-    "price": 3000.00
+    "price": 3000.00,
+    "start_date": "2024-09-10",
+    "end_date": "2024-11-09"
   }
 ]
